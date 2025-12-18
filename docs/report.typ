@@ -107,6 +107,41 @@ The basic idea is simple:
 + If one of the newly reached states violate the specification then the property is not an invariant and we can return `False` along with a counter-example.
 + If there are no more new states to explore and none of them violate the specification then the property is an invariant and we can return `True` along with `None`.
 
+```python
+def check_explain_inv_spec(spec):
+    # 1. Setup the bdds
+    model = pynusmv.glob.prop_database().master.bddFsm  # Model fsm
+
+    spec_bdd = spec_to_bdd(model, spec)                 # Bdd of spec
+    negated_spec_bdd = -spec_bdd                        # Bdd of ~spec
+
+    # 2. Explore the regions
+    reach = model.init                                  # Already explored states
+    new = model.init                                    # States to explore
+
+    trace = [reach]                                     # Trace used to save the execution
+
+    while new.isnot_false() and not new.intersected(negated_spec_bdd):
+
+        new = model.post(new) - reach                   # Remove already checked states
+        reach = reach + new                             # Add new states to reach
+
+        trace.append(new)                               # Add reached region to trace
+
+    if (not new.intersected(negated_spec_bdd)):
+        # The formula is satisfied on every reachable state
+        return (True, None) 
+    
+    # 3. Build the counter-example
+    invalid_states = new * negated_spec_bdd             # States in new that violate the spec
+    target = model.pick_one_state(invalid_states)       # State that violate the spec
+    
+    counter_example = compute_counter_example(model, target, trace) 
+
+    # The property is not an invariant, return a counter-example
+    return (False, tuple(counter_example))
+```
+
 === Counter example generation
 
 If the property is not an invariant we need to provide a counter-example, that is an execution of the system that lead to a state that violate the specification. To do that the algorith saves all the visited states in a list called `trace` and when a violating state is found it uses that list to reconstruct the path from the initial state to the violating state.
@@ -122,6 +157,39 @@ Lookin at the real implementation the function `compute_counter_example(model, s
 - The process continues until the trace is finished.
 
 It's easy to see that the resulting `counter_example` list is a valid execution of the system that lead to a state that violate the specification. Even if the trace is composed by a single region (it can only happen if the system starts with and invalid configuration) the algorithm will work correctly, returning a counter-example composed by the initial state only.
+
+```python
+def compute_counter_example(model, target, trace):
+    current = target                  # Current execution state
+    pre_states = model.pre(current)   # Compute states that can reach current in one step  
+    counter_example = [current.get_str_values()]
+
+    # Check if the model uses inputs
+    has_inputs = not not len(model.bddEnc.inputsVars)           
+
+    # Interate over the trace starting from the second last
+    for current_set in reversed(trace[:-1]):
+
+        # Get a state that has a transition to current
+        prev_state = model.pick_one_state(current_set * pre_states)     
+
+        # Get the input that caused the transition
+        if has_inputs:
+            trans_inputs = model.get_inputs_between_states(prev_state, current)
+            input_values = model.pick_one_inputs(trans_inputs).get_str_values()
+            counter_example.insert(0, input_values)
+        else:
+            counter_example.insert(0, {})
+
+        # Add the picked state
+        counter_example.insert(0, prev_state.get_str_values())        
+
+        # Update invariants
+        current = prev_state
+        pre_states = model.pre(current)
+
+    return counter_example
+```
 
 == Correctness
 
