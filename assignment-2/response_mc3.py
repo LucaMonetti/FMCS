@@ -77,94 +77,124 @@ def parse(spec):
     return (f_formula, g_formula)
 
 def compute_loop(model, s, frontiers):
-    has_inputs = len(model.bddEnc.inputsVars) > 0
+    # Check if the model uses inputs
+    has_inputs = not not len(model.bddEnc.inputsVars)
 
-    # Phase 2.2: Building the self loop
+    # Find the minimum value of k
     for k in range(len(frontiers)):
         if s <= frontiers[k]:
             break
-    # frontiers[k] contains the loop knot
 
-    path = [ s.get_str_values() ]
-    curr = s
+    # Reconstruct the execution
+    path = [ s.get_str_values() ]                       # Cycle execution
+    current = s                                         # Current Value
 
-    for i in range(k - 1, -1, -1):
+    for i in range(k - 1, -1, -1):                    
 
-        old = curr
-        pred = model.pre(curr) * frontiers[i]
-        curr = model.pick_one_state(pred)
+        # Get a state that has a transition to current
+        prev_states = model.pre(current) * frontiers[i]
+        prev_state = model.pick_one_state(prev_states)
         
+         # Get the input that caused the transition
         if has_inputs:
-            inputs = model.get_inputs_between_states(old, curr)
-            path.insert(0, model.pick_one_inputs(inputs).get_str_values())
+            trans_inputs = model.get_inputs_between_states(pre_states, current)
+            inpute_values = model.pick_one_inputs(inputs).get_str_values()
+            path.insert(0, input_values)
         else:
             path.insert(0, {})
 
-        path.insert(0, curr.get_str_values())
+        # Add the picked state
+        path.insert(0, prev_state.get_str_values())
+
+        # Update invariants
+        current = prev_state                # Update the current state
+        pre_states = model.pre(current)     # States that can reach current in one step
     
-    # Looping input
+    # Get inputs that starts the loop
     if has_inputs:
-        inputs = model.get_inputs_between_states(s, curr)
+        inputs = model.get_inputs_between_states(s, current)
         path.insert(0, model.pick_one_inputs(inputs).get_str_values())
     else:
         path.insert(0, {})
 
+    # Add s at the beginning of the loop
     path.insert(0, s.get_str_values())
+
     return path
 
 def compute_prefix(model, s):
-    has_inputs = len(model.bddEnc.inputsVars) > 0
-    # 2.3 Reaching the self loop
-    
-    # Insert inside frontiers the regions to reach s
-    # [ init ... pre_s ]
-    reached = model.init 
-    frontiers = [reached]
+    # Check if the model uses inputs
+    has_inputs = not not len(model.bddEnc.inputsVars)
 
-    while (reached * s).is_false():
-        next = model.post(reached) - reached
-        frontiers.append(next)
-        reached = reached + next
+    reach = model.init                  # Already explored states
+    new = model.init                    # States to explore
 
-    path = []
-    last = s
-    # Construct the path traversing the frontiers in reverse
+    frontiers = [reach]
+
+    while (reach * s).is_false():       # Check if s is contained in reach
+
+        new = model.post(new) - reach   # Find reachable states and remove already checked ones
+        reach = reach + new             # Add new states to reach
+
+        frontiers.append(new)           # Add reached region to frontiers
+
+    # Build the path
+    current = s
+
+    pre_states = model.pre(current)
+    path = [current.get_str_values()]
+
+    # Interate over the frontiers starting from the second last
     for frontier in reversed(frontiers[:-1]):
-        can_reach_last = model.pre(last)
-
-        # The current state is one of the states that can reach last in
-        # one step
-        current_state = model.pick_one_state(frontier * can_reach_last)
         
+        # Get a state that has a transition to current
+        prev_state = model.pick_one_state(frontier * pre_states)     
+        
+        # Get the input that caused the transition
         if has_inputs:
-            inputs = model.get_inputs_between_states(current_state, last)
-            path.insert(0, model.pick_one_inputs(inputs).get_str_values())
+            trans_inputs = model.get_inputs_between_states(pre_states, current)
+            inpute_values = model.pick_one_inputs(inputs).get_str_values()
+            path.insert(0, input_values)
         else:
             path.insert(0, {})
 
-        path.insert(0, current_state.get_str_values())
+        # Add the picked state
+        path.insert(0, prev_state.get_str_values())
 
-        last = current_state
+        # Update invariants
+        current = prev_state                # Update the current state
+        pre_states = model.pre(current)     # States that can reach current in one step
         
     return path
 
-def compute_counter_example(model: pynusmv.fsm.BddFsm, recur, pre_reach):
-    for s in model.pick_all_states(recur):
-        r = pynusmv.dd.BDD.false()
-        new = model.post(s) * pre_reach
+def compute_counter_example(model, recur, pre_reach):
+    """
+    Return a list of alternating states in trace and inputs, starting
+    with an inital state of the model and ending with a state already 
+    present in the sequence. 
+    States and inputs are represented by dictionaries where keys are state 
+    and inputs variable of the loaded SMV model, and values are their value.
+    """
+
+    for s in model.pick_all_states(recur):      # Analyze each state of recur
+
+        r = pynusmv.dd.BDD.false()              # Reached states
+        new = model.post(s) * pre_reach         # Newly valid state in post image  
 
         frontiers = [new]
 
         while new.isnot_false():
             r = r + new
-            new = model.post(new) * pre_reach
-            new = new - r
+            new = (model.post(new) * pre_reach) - r
 
             frontiers.append(new)
         
         r = r * recur
+
         if s <= r:
-            return tuple(compute_prefix(model, s) + compute_loop(model, s, frontiers))
+            prefix = compute_prefix(model, s)
+            loop = compute_loop(model, s, frontiers)
+            return tuple(prefix + loop)
 
 def check_explain_response_spec(spec):
     """
@@ -173,29 +203,40 @@ def check_explain_response_spec(spec):
     or not. 
     """
 
-    model = pynusmv.glob.prop_database().master.bddFsm
+    # 1. Check the formula structure
     react = parse(spec)
     if (react == None):
         return None
+
+    # 2. Setup the bdds
+    model = pynusmv.glob.prop_database().master.bddFsm
     
     f_spec, g_spec = react
 
-    f_bdd = spec_to_bdd(model, f_spec)
-    neg_g_bdd = spec_to_bdd(model, ~g_spec)
+    f_bdd = spec_to_bdd(model, f_spec)                      # BDD for formula f
+    neg_g_bdd = spec_to_bdd(model, ~g_spec)                 # BDD for formula ~g
 
-    reach = model.reachable_states
-    recur = reach * neg_g_bdd * f_bdd
+    # 3. Cycle detection
+    reach = model.reachable_states                          # Reachable states
+    recur = reach * neg_g_bdd * f_bdd                       # Possible starting point for a cycle
 
     while recur.isnot_false():
-        pre_reach = pynusmv.dd.BDD.false()
-        new = model.pre(recur) * neg_g_bdd
+        pre_reach = pynusmv.dd.BDD.false()                  # States that can reach recur
+        new = model.pre(recur) * neg_g_bdd                  # Newly discovered states
 
         while new.isnot_false():
+
             pre_reach = pre_reach + new
+
             if recur <= pre_reach:
+                # A cycle is found
                 return (False, compute_counter_example(model, recur, pre_reach))
-            new = (model.pre(new) - pre_reach) * neg_g_bdd
+
+            new = (model.pre(new) - pre_reach) * neg_g_bdd  # Added only state where ~g is True
+
         recur = recur * pre_reach
+
+    # The formula is satisfied by the model
     return (True, None)
     
 
