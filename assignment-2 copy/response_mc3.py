@@ -98,7 +98,7 @@ def compute_loop(model, s, frontiers):
          # Get the input that caused the transition
         if has_inputs:
             trans_inputs = model.get_inputs_between_states(pre_states, current)
-            inpute_values = model.pick_one_inputs(inputs).get_str_values()
+            input_values = model.pick_one_inputs(inputs).get_str_values()
             path.insert(0, input_values)
         else:
             path.insert(0, {})
