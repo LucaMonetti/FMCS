@@ -92,14 +92,14 @@ def check_explain_inv_spec(spec):
 
     while new.isnot_false() and not new.intersected(negated_spec_bdd):
 
-        new = model.post(new) - reach                                   # Remove the already checked states
-        reach = reach + new                                             # Consider them as reached
+        new = model.post(new) - reach                                   # Find reachable states and remove already checked ones
+        reach = reach + new                                             # Add new states to reach
 
-        trace.append(new)
+        trace.append(new)                                               # Add reached region to trace
 
-    if (not new.intersected(spec_bdd)):
+    if (not new.intersected(negated_spec_bdd)):
         # The formula is satisfied on every reachable state
-        return (True, None)
+        return (True, None) 
     
     # 3. Build the counter-example
     invalid_states = new * negated_spec_bdd                             # States in new that violate the spec
