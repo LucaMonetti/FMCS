@@ -262,48 +262,46 @@ The trace list is finite, since the model is finite and the algorithm explores o
 
 == Assignment
 
-The second part of the assignment request the implementation of a symbolic algorithm for the verification of a specific class of LTL formulas called _response formulas_. They have a specific form:
+The second part of the assignment requires the implementation of a symbolic algorithm for the verification of a specific class of LTL formulas called _response formulas_. These formulas follow the structure:
 
 $ square (f -> diamond g) $
 
-Both $f$ and $g$ are Boolean combinations of base formulas with no temporal operators.
+In this context, both $f$ and $g$ are Boolean combinations of base formulas with no temporal operators.
 
-In the following pages will be described an implementation of the function `check_examplain_response_spec(spec)` that respect the following specification:
+In the following pages will be described an implementation of the function `check_examplain_response_spec(spec)` that determines id the provided `spec` is satisfied by the loaded model.
 
-- Check if the given `spec` is satisfied by the loaded SMV model
-- The return value is a `tuple` of 2 elemens:
-  - The first element is a Boolean value that is `True` if the formula is satisfied, `False` otherwise
-  - The second element is `None` is the formula is satisfied but contains a counter-example otherwise.
-- The counter-example take the form of a tuple of alternating states and input, ending with a state.
-- If the execution is looping the last state should be present somewhere else in the sequence.
+If a specification is not satisfied by the model a counter-example must be returned. A counter-example is a `tuple` of alternating states and input that represent an actual execution of the system that start from an initial state and lead to a state that violates the specification.
+
+The output must be a tuple of 2 elements:
+- Result: a `boolean` value that is `True` if `spec` is satisfied, `False` otherwise.
+- Counter Example: `None` if `spec` is satisfied, a counter-example otherwise.
 
 == Logic
 
-We are dealing with a _response formula_ that we can explain such as:
+The algorithm addresses _response formula_, which are defined by the requirement:
 
-#align(center, [_Every time that $f$ happens, $g$ must eventually happen at the same time or afterwards._])
+#align(center, [_Every time that $f$ occours, $g$ must eventually happen at the same time or afterwards._])
 
-Being a reactive property, and therefore happens over an infinite computation, to prove that the formula is not satisfied we must provide a counter-example in witch the negation is true. A path in witch $f$ holds but $g$ never happens again. For that we need 2 parts:
+As a liveness property, a response formula is evaluated over infinite computations. To prove that the formula is falsified a counter-example that satisfies the negation of the property must be provided. A path in witch $f$ holds but $g$ never happens again. 
 
-+ *Prefix*: A sequence of states leading to $f$
-+ *Loop*: An infinite cycle in witch $g$ is always `false`.
+In a finite state system such path is composed by two section:
++ *Prefix*: A sequence of states leading to a state where $f$ is satisfied.
++ *Loop*: An infinite cycle originating from the prefix, within which $g$ is always `False`.
 
 == Implementation
 
-The check of the formula structure was already done by the function `parse(spec)`, so we can just use it and check if the result is a valid `tuple` of $f$ and $g$ or `None`. In the second case the program shuld return `None`, beacause the formula is not a _response formula_.
+The verification process begins by validating the structure of the specification using the provided function `parse(spec)`. If the function returns None, the specification is not a valid response formula, and the procedure terminates.
 
-After that, using the provided function `spec_to_bdd(model, spec)`, we can obtain the `bdd` generated from the two needed formulas: $f$ and $not g$.
+Once the structure is validated, the formulas $f$ and $not g$ are converted into BDDs using the provided function `spec_to_bdd(model, spec)`.
 
-The algorithm will operate only on the reachable states, so we get them using `model.reachable_states`. From this we can compute the variable `recur` that will contain all the possible starting point for a cycle. In our case all the reachable states in which $f$ holds and $not g$ holds.
+== Iterative cycle detection
 
-There are two possibile execution:
+The algorithm will operate only on the reachable states of the model, identified by `model.reachable_states`. The variable `recur` is initialized within this set, specifically to represent all reachable states where $f$ holds and $g$ is `False`.
 
-+ `recur` becomes empty, there are no possible cycle, the formula holds and the algorithms return a positive result.
-+ Otherwise each iteration compute the `pre_reach`, all the state that can be reach `recur` in a finite number of steps greater than $0$, and `new`, all the states that might be part of the cycle.
-
-If a cycle is found then the algorithm will build a counter-example using the function `compute_counter_example(model, recur, pre_reach)`, which will be describe in the next section.
-
-The loop runs until there are no more possibile candidates for a cycle.
+The algorithm then preceeds to identify a cycle where $g$ remains `False`:
+- At each iteration `recur` is evaluated. If `recur` is empty then a cycle is not found and the algorithm returns `(True, None)`.
+- Otherwise the algorithm compute `pre_reach`, which consists of all states capable of reaching the current `recur` in one or more transition. The set `new` is computed to identify states that remains part of a potential cycle.
+- If a cycle is found, the algorithm build a counter-example using the function `compute_counter_example(model, recur, pre_reach)`, which will be describe in the next section.
 
 ```python
 def check_explain_response_spec(spec):
@@ -341,18 +339,22 @@ def check_explain_response_spec(spec):
 
 === Counter example generation
 
-As said before a counter-example is an execution of the system that leads to a state for wich the formula is not satisfied. It is composed of 2 parts:ù
+A counter-example is an execution of the system that leads to a state where the formula is not satisfied. It is composed of 2 parts:
 
-+ *Prefix*: A sequence of states leading to $f$
-+ *Loop*: An infinite cycle in witch $g$ is always `false`.
++ *Prefix*: A sequence of states leading to a state where $f$ hold.
++ *Loop*: An infinite cycle in which $g$ is always `False`.
 
-Those two parts are respectively computed by `compute_prefix` and `compute_loop`.
+Those two parts are computed by `compute_prefix` and `compute_loop` and then combined.
 
-==== Build the path
+In the end the algorithm return an execution that start from an initial stata, reach a state where $f$ holds and $g$ is `False` and then proced with a cycle whithin which $g$ is always `False`.
 
-The first computation is easy, we just need to compute a path that reach the starting node of the cycle. To do that, we start from the `model.init` set of states and we proced with the execution until we reach a `frontier` that contains that specific state.
+==== Build the prefix
 
-After that we can construct the needed `tuple` visiting the array from the end to the beginning.
+The prefix is reconstructed by identifying a path form the initial state set to the specific set identified as the entry point of the cycle. This procedure follows the previously discussed symbolic reachability approach.
+
+Starting from model.init, the algorithm explores reachable states layer by layer. Each layer (or "frontier") is stored in a list until a frontier is reached that contains the designated starting state of the cycle.
+
+Once the target state is located the sequence is constructed by traversing the frontiers in reverse. The resulting sequence is then assembled into the final `tuple`.
 
 ```python
 def compute_prefix(model, s):
@@ -394,20 +396,15 @@ def compute_prefix(model, s):
 
 ==== Build the loop
 
-The loop is more complex. We need to compute a loop starting from `s`, following the path through the frontiers list.
+The reconstruction of the infinite cycle is a more complex precedure that requires to identify a sequence that begins and ends at the same state.
 
-We first need to identify the smallest number of steps `k` that contains `s`. We then define 2 invariant:
+The algorithm initially identify the minimum number of steps required to reach the state `s` withing the candidate region.
 
-- `path` -> All the possible path ending in `s` in `k` steps.
-- `current` -> Last state put in the `path`.
+The algorithm mantains two invariant:
+- `path`: a sequence of alternating states and inputs.
+- `current`: the state currently being precessed.
 
-The algorithm build the counter-example iterating backwards the `frontiers` taking one state and its corresponding input at the time.
-
-After the last iteration `path` contains a full path ending in `s` that starts from the first `frontier` region.
-
-Unite those 2 path togheter leads to a path starting from an initial state, reaching a state in witch $f$ holds and $not g$ holds, and lead to a cycle in witch $not g$ holds.
-
-We can then be sure that the counter-example is built on the right way and rapresent a valid execution of the system that don't satisfies the formula.
+At each iteration the algorithm select a predecessor state from the preceding frontier that can reach `current` in a single transition. The state is prepend to the output with its corresponding input.
 
 ```python
 def compute_loop(model, s, frontiers):
