@@ -83,29 +83,34 @@
 
 == Assignment
 
-The first part of the assignement request the implementation of the symbolic algorithm for invariant verification. If the test property is not an invariant of the model the algorithm also provide an execution of the system that violate the invariant.
+The primary objective of the first part of the assignment is the implementation of a symbolic algorithm for invariant verification using BDDs (Binary Decision Diagrams) to interact with regions. Given a property, denoted as `spec`, the algorithm determines whether it holds for all reachable states of the loaded model. 
 
-In particular the algorithm must respect the following specification:
+If a specification is not an invariant of the model a counter-example must be returned. A counter-example is a `tuple` of alternating states and input that represent an actual execution of the system that start from an initial state and lead to a state that violates the specification.
 
-- Check if `spec` is an invariant for the loaded model
-- The return value is a `tuple` of 2 elements:
-  - The first element is a Boolean value that is `True` if the formula is an invariant, `False` otherwise
-  - The second element is `None` is the formula is an invariant and contains an execution that violate that specification otherwise.
-- The execution take the form of a `tuple` of alternating states and input, ending with a state.
+The output must be a tuple of 2 elements:
+- Result: a `boolean` value that is `True` if `spec` is an invariant, `False` otherwise.
+- Counter Example: `None` if `spec` is an invariant, a counter-example otherwise.
 
 == Logic
 
-In order to check if a specification is an invariant of the loaded model we need to check if there exists a path that lead to a state that violate the specification. If such path exists then the specification is not an invariant and we can provide that path as counter-example.
+An invariant of the model is a property $phi$ that holds for every reachable state. The verification process is built on this principle: to prove that $phi$ is an invariant of the system the algorithm must demonstrate that $not phi$ is unreachable from any initial state.
+
+That leads to two possible outcome:
+- Invariant Holds: if the algorithm explores all the reachable states without finding one in which $not phi$ is `True` then $phi$ is an invariant of the model.
+- Violation: if the algorithm find a reachable state where $not phi$ holds then the property $phi$ is not an invariant.
+
 
 == Implementation
 
-The first step is to convert the `spec` into a `bdd` using the provided function `spec_to_bdd(model, spec)`. After that we can use the symbolic algorithm for invariant verification to chek the property.
+The verification process begins with the conversion of the specification `spec` into a BDD using the provided function `spec_to_bdd(model, spec)`. This allows for the application of symbolic algorithm for invariant verification.
 
-The basic idea is simple:
-+ The algorithm start from the initial states of the model
-+ It exmplore the reachable states step by step computing the `post` image of the already reached states. Is important to remove from the `post` image all the states that already have been reached, in order to avoid infinite loops.
-+ If one of the newly reached states violate the specification then the property is not an invariant and we can return `False` along with a counter-example.
-+ If there are no more new states to explore and none of them violate the specification then the property is an invariant and we can return `True` along with `None`.
+The algorithm proceeds through the following phases:
+- The sets `reach` and `new` are initialized with the model's initial states.
+- At each iteration, the set `new` is evaluated. If `new` is empty or violates the specification $phi$ then the exploration is complete.
+- If no violations are found and `new` is not empty the algorithm computes the post-image of `new` removing all the already checked states. The newly discovered states are included in `reach`.
+- After the last iteration of the loop there are 2 cases:
+  - If there is an invalid state inside `new` then the algorithm returns `False` and computes a counter-example.
+  - If `new` is empty the specification $phi$ holds for every reachable state; therefore, it is an invariant.
 
 ```python
 def check_explain_inv_spec(spec):
@@ -144,23 +149,20 @@ def check_explain_inv_spec(spec):
 
 === Counter example generation
 
-If the property is not an invariant we need to provide a counter-example, that is an execution of the system that lead to a state that violate the specification. To do that the algorith saves all the visited states in a list called `trace` and when a violating state is found it uses that list to reconstruct the path from the initial state to the violating state.
+When a specification is violated, a counter-example must be provided to demonstrate the failure.
 
-Starting from the violating state `s`, the algorithm iterate backwards through the `trace` list, at each step picking one state that can reach the current state in one step. If the model has inputs, the corresponding input is also picked. The process continues until an initial state is reached.
+The algorithm maintains a `trace` list where each element represents the region reached on that iteration starting from the previous one. The execution is then reconstructed via backwards traversal.
 
-Lookin at the real implementation the function `compute_counter_example(model, s, trace)` does exactly that:
-- It first checks if the model has inputs
-- It compute the list of invalid states intersecting `new` (the set of states that contains an invalid one) with `neg_spec_bdd`.
-- It picks one of those invalid states as starting point and insert it in the counter-example list.
-- It then iterate backwards through the `trace` list starting from the second to last element, at each step picking one state that can reach the current state in one step.
-- If the model has inputs, the corresponding input is also picked.
-- The process continues until the trace is finished.
-
-It's easy to see that the resulting `counter_example` list is a valid execution of the system that lead to a state that violate the specification. Even if the trace is composed by a single region (it can only happen if the system starts with and invalid configuration) the algorithm will work correctly, returning a counter-example composed by the initial state only.
+The function `compute_counter_example(model, trace, spec)` implements this operation throught the following steps:
+- The algorithm pick a state `current` from the set of invalid states, computed by the intersection `trace[-1] * spec`, and insert it into the `counter_example` list.
+- The `trace` is then traversed in reverse starting from the second to last element. At each iteration one state is selected from the current region and added, with the curresponding input, to `counter_example`.
+- The procedure returns a valid execution of the model that leads to an invalid state.
 
 ```python
-def compute_counter_example(model, target, trace):
-    current = target                  # Current execution state
+def compute_counter_example(model, trace, neg_spec):
+    invalid_states = trace[-1] * neg_spec                           # States that violate spec
+    current = model.pick_one_state(invalid_states)              # Current considered value
+
     pre_states = model.pre(current)   # Compute states that can reach current in one step  
     counter_example = [current.get_str_values()]
 
@@ -193,56 +195,66 @@ def compute_counter_example(model, target, trace):
 
 == Correctness
 
-In this section we will demonstrate in a formal way the correctness of the implemented algorithm.
-The algoritm is composed by two main loop:
-- The first loop explore all the reachable states of the system, checking if one of them violate the specification.
-- The second loop generate a counter-example if one of the reachable states violate the specification.
+This section provides a formal demonstration of correctness for the implemented algorithm.
+The algorithm is composed by two main loops:
+- Reachable state exploration
+- Counter-example generation
 
-Using the Loop Invariant technique we can prove the correctness of the algorithm.
+The correctness of each phase is demonstrated using the Loop invariant technique.
 
 === Exploration of the reachable states
 
-Starting from the first loop, we can indentify three loop invariants:
-- `reach`: representing the region of all the already reached states without repetitions.
+The exploration phase identifies all the reachable states while checking for property violations.
+
+==== Loop invariants
+
+Three invariants are maintained throughout the execution in the first loop:
+- `reach`: representing the region of all the already reached states without duplicates.
 - `new`: represent the region of all the newly found reachable states.
-- `trace`: a list of regions representing all the regions reached at each iteration.
+- `trace`: an ordered list where each element represents a regions of all the states reached at each iteration.
 
-Initially `reach`,`new` and `trace` are initialized with the initial states of the model, therefore the loop invariants hold.
+==== Base case
+Initially `reach`,`new` and `trace` are initialized with the initial states of the model, therefore all invariants hold.
 
-The loop condition check if `new` is not empty, in that case there are still new states to explore and the loop body is executed.
+==== Inductive step
+The loop condition checks if `new` is not empty, in that case there are still new states to explore and the loop body is executed.
 
-For each interation $i$:
-- `new` is updated to contain all the states that can be reached from `new` in one step, removing all the states that are already in `reach`. Therefore `new` contains only states reachable from the $i - 1$ iteration region that are not already in `reach`.
-- `reach` is updated to contain all the states reached so far, therefore it contains all the states reachable from the initial states in a finite number of steps.
-- `trace` is updated appending the current `new` region, therefore is a list of $i + 1$ elements representing all the regions reachable from the previus region.
+For each iteration $i$:
+- `new` is updated by computing the post-image of the previous `new` and subtracting all the states that are already present in `reach`. Therefore `new` contains only states reachable from the $i - 1$ iteration region that are not already in `reach`.
+- `reach` is updated to include the current set `new`, therefore it contains all the reachable states found so far.
+- `trace` appends the current set `new`, therefore is a list of $i + 1$ elements representing all the regions reachable from the previous region.
 
+==== Termination
 We can then see that the loop invariants hold for the base case and for the inductive case. Therefore by induction the loop invariants hold for each iteration of the loop.
 
 Since we are dealing with a finite state model the algorithm will eventually explore all the reachable states. Therefore there are only two possible execution:
 
-+ `new` becomes empty, all the reachable states have been explored and none of them violate the specification, so the algorithm return `True` along with `None`.
-+ `new` intersected with `neg_spec_bdd` is not empty, there exists at least one newly reached state that violate the specification, so the algorithm return `False` along with a counter-example.
++ `new` becomes empty, all the reachable states have been explored and none of them violate the specification, so the algorithm returns `(True, None)`.
++ `new` intersected with `neg_spec_bdd` is not empty, there exists at least one newly reached state that violates the specification $phi$, so the algorithm returns `False` along with a counter-example.
 
 === Counter-example generation
 
-In the second part of the algorithm we can identify two loop invariant:
+If a violation is detected, a second loop reconstructs a valid execution path from one initial state to the violating state.
 
-- `counter_example`: a list of alternating states and inputs representing the execution of the system that lead to a state that violate the specification.
-- `current_bad_state`: the current state being added to the counter-example list.
-- `prev_states`: the set of states that can reach `current_bad_state` in one step.
+==== Loop invariant
 
-Initially `current_bad_state` is initialized with a state picked from `new` intersected with `neg_spec_bdd`, therefore it is a state that violate the specification. The `counter_example` list is initialized with that state only. Therefore the loop invariants hold.
+Two invariants are maintained throughout the execution in the second loop:
+- `counter_example`: a list of alternating states and inputs representing a valid execution of the system that lead to a invalid state.
+- `current`: the current state being added to the counter-example list.
 
-The loop iterate backwards through the `trace` list, starting from the second to last element. At each step $i$:
-- `prev_state` is a state picked form the set of states that can reach `current_bad_state` in one step and that are also in the $i$ `trace` region.
-- `counter_example` is updated inserting `prev_state` and the corresponding input (if the model has inputs) at the beginning of the list.
-- `current_bad_state` is updated to `prev_state`.
+==== Base case
+Initially `current` is initialized with a state picked from the set of invalid states, therefore it is a state that violates the specification. The `counter_example` list is initialized with this state. Therefore the invariants hold.
 
+==== Inductive step
+The algorithm iterate backwards through the `trace` list, starting from the second to last element. At each step $i$:
+- A predecessor state is selected from a list of states that are in `trace[i]` and can reach `current` in one transition.
+- `counter_example` is updated by prepending this predecessor and the corresponding input.
+- `current` is updated to this predecessor.
+
+==== Termination
 The invariants hold for the base case and for the inductive case. Therefore by induction the loop invariants hold for each iteration of the loop.
 
-The trace list is finite, since the model is finite and the algorithm explore only reachable states. Therefore the loop will terminate after a finite number of steps. There are only one possible execution: the trace is finished and the algorithm return the `counter_example` list.
-
-By construction `counter_example` is an execution of the system that lead to a state that violate the specification.
+The trace list is finite, since the model is finite and the algorithm explores only reachable states. Therefore the loop will terminate after a finite number of steps. There are only one possible execution: the algorithm returns the `counter_example` list.
 
 #pagebreak()
 
@@ -250,7 +262,7 @@ By construction `counter_example` is an execution of the system that lead to a s
 
 == Assignment
 
-The second part of the assignment request the implementation of a symbolic algoritm for the verification of a specific class of LTL formulas called _response formulas_. They have a specific form:
+The second part of the assignment request the implementation of a symbolic algorithm for the verification of a specific class of LTL formulas called _response formulas_. They have a specific form:
 
 $ square (f -> diamond g) $
 
@@ -286,7 +298,7 @@ The algorithm will operate only on the reachable states, so we get them using `m
 
 There are two possibile execution:
 
-+ `recur` becomes empty, there are no possible cycle, the formula holds and the algorithm return a positive result.
++ `recur` becomes empty, there are no possible cycle, the formula holds and the algorithms return a positive result.
 + Otherwise each iteration compute the `pre_reach`, all the state that can be reach `recur` in a finite number of steps greater than $0$, and `new`, all the states that might be part of the cycle.
 
 If a cycle is found then the algorithm will build a counter-example using the function `compute_counter_example(model, recur, pre_reach)`, which will be describe in the next section.
@@ -389,7 +401,7 @@ We first need to identify the smallest number of steps `k` that contains `s`. We
 - `path` -> All the possible path ending in `s` in `k` steps.
 - `current` -> Last state put in the `path`.
 
-The algoritm build the counter-example iterating backwards the `frontiers` taking one state and its corresponding input at the time.
+The algorithm build the counter-example iterating backwards the `frontiers` taking one state and its corresponding input at the time.
 
 After the last iteration `path` contains a full path ending in `s` that starts from the first `frontier` region.
 

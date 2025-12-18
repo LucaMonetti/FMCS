@@ -29,7 +29,7 @@ def default_check_explain_inv_spec(spec):
     res, trace = pynusmv.mc.check_explain_ltl_spec(ltlspec)
     return res, trace
 
-def compute_counter_example(model, target, trace):
+def compute_counter_example(model, trace, neg_spec):
     """
     Return a list of alternating states in trace and inputs, starting
     with an inital state of the model and ennding with target. 
@@ -37,7 +37,9 @@ def compute_counter_example(model, target, trace):
     and inputs variable of the loaded SMV model, and values are their value.
     """
 
-    current = target                                            # Current execution state
+    invalid_states = trace[-1] * neg_spec                       # States that violate spec
+    current = model.pick_one_state(invalid_states)              # Current considered value
+
     pre_states = model.pre(current)                             # States that can reach current in one step   
     counter_example = [current.get_str_values()]                # Counter-example list
 
@@ -109,10 +111,7 @@ def check_explain_inv_spec(spec):
         return (True, None) 
     
     # 3. Build the counter-example
-    invalid_states = new * negated_spec_bdd                             # States in new that violate the spec
-    target = model.pick_one_state(invalid_states)                       # State that violate the spec
-    
-    counter_example = compute_counter_example(model, target, trace)     # Execution leading to the violation
+    counter_example = compute_counter_example(model, trace, negated_spec_bdd)     # Execution leading to the violation
 
     # The property is not an invariant, return a counter-example
     return (False, tuple(counter_example))
