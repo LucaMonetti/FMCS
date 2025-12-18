@@ -1,7 +1,7 @@
 #set document(author: "Luca Monetti", title: [Assignment 1])
 #set page(
   paper: "a4",
-  margin: (x: 2.5cm, y:3cm),
+  margin: (x: 2.5cm, y: 3cm),
   header: (
     context {
       if here().page() > 1 {
@@ -11,19 +11,18 @@
           spacing: 6pt,
           grid(
             columns: (1fr, 1fr),
-            align(left, upper(context document.title)),
-            align(right, upper(context document.author.first()))
+            align(left, upper(context document.title)), align(right, upper(context document.author.first())),
           ),
-          line(length: 100%, stroke: 0.5pt)
+          line(length: 100%, stroke: 0.5pt),
         )
       }
     }
   ),
   footer: context {
-      if here().page() > 1 {
-        align(center, text(size: 10pt, counter(page).display()))
-      }
+    if here().page() > 1 {
+      align(center, text(size: 10pt, counter(page).display()))
     }
+  },
 )
 
 #show raw.where(block: true): it => {
@@ -39,14 +38,16 @@
         columns: (20pt, 1fr),
         gutter: 10pt,
         // Line numbers column
-        ..range(0, lines.len()).map(i => (
-          // 1. The Line Number
-          align(right + horizon, text(fill: luma(150), font: "DejaVu Sans Mono", size: 9pt, str(i + 1))),
-          // 2. The Code Line
-          raw(lines.at(i), lang: it.lang)
-        )).flatten()
+        ..range(0, lines.len())
+          .map(i => (
+            // 1. The Line Number
+            align(right + horizon, text(fill: luma(150), font: "DejaVu Sans Mono", size: 9pt, str(i + 1))),
+            // 2. The Code Line
+            raw(lines.at(i), lang: it.lang),
+          ))
+          .flatten()
       )
-    }
+    },
   )
 }
 
@@ -56,24 +57,24 @@
 // -- Front Page
 
 #page(align(center + top)[
-    
-    #image("figures/unipd-logo.svg", width: 40%)
-    
-    #v(1.3em)
-    #text(size: 34pt, weight: "bold", "University of Padua") \    
-    #v(10pt)
-    #text(size: 14pt, [Department of Mathematics "Tullio Levi-Civita"])
-    
-    #v(15%)
-    
-    #text(size: 14pt, [Formal Methods for Cyber-Physical Systems])
-    #v(-0.5em)
-    #text(size: 26pt, weight: "bold", upper(context document.title))
-    
-    #v(1fr)
 
-    #text(size: 12pt, context document.author.first()) \
-  
+  #image("figures/unipd-logo.svg", width: 40%)
+
+  #v(1.3em)
+  #text(size: 34pt, weight: "bold", "University of Padua") \
+  #v(10pt)
+  #text(size: 14pt, [Department of Mathematics "Tullio Levi-Civita"])
+
+  #v(15%)
+
+  #text(size: 14pt, [Formal Methods for Cyber-Physical Systems])
+  #v(-0.5em)
+  #text(size: 26pt, weight: "bold", upper(context document.title))
+
+  #v(1fr)
+
+  #text(size: 12pt, context document.author.first()) \
+
 ])
 
 #counter(page).update(1)
@@ -82,19 +83,98 @@
 
 == Assignment
 
-The first part of the assignement request the implementation of the symbolic algorithm fo invariant verification. If the test property is not an invariant of the model the algorithm also provide an execution of the system that violate the invariant.
+The first part of the assignement request the implementation of the symbolic algorithm for invariant verification. If the test property is not an invariant of the model the algorithm also provide an execution of the system that violate the invariant.
 
 In particular the algorithm must respect the following specification:
 
 - Check if `spec` is an invariant for the loaded model
-- The return value is a `tuple` of 2 elemens:
+- The return value is a `tuple` of 2 elements:
   - The first element is a Boolean value that is `True` if the formula is an invariant, `False` otherwise
   - The second element is `None` is the formula is an invariant and contains an execution that violate that specification otherwise.
-- The execution take the form of a tuple of alternating states and input, ending with a state.
+- The execution take the form of a `tuple` of alternating states and input, ending with a state.
 
 == Logic
 
+In order to check if a specification is an invariant of the loaded model we need to check if there exists a path that lead to a state that violate the specification. If such path exists then the specification is not an invariant and we can provide that path as counter-example.
+
 == Implementation
+
+The first step is to convert the `spec` into a `bdd` using the provided function `spec_to_bdd(model, spec)`. After that we can use the symbolic algorithm for invariant verification to chek the property.
+
+The basic idea is simple:
++ The algorithm start from the initial states of the model
++ It exmplore the reachable states step by step computing the `post` image of the already reached states. Is important to remove from the `post` image all the states that already have been reached, in order to avoid infinite loops.
++ If one of the newly reached states violate the specification then the property is not an invariant and we can return `False` along with a counter-example.
++ If there are no more new states to explore and none of them violate the specification then the property is an invariant and we can return `True` along with `None`.
+
+=== Counter example generation
+
+If the property is not an invariant we need to provide a counter-example, that is an execution of the system that lead to a state that violate the specification. To do that the algorith saves all the visited states in a list called `trace` and when a violating state is found it uses that list to reconstruct the path from the initial state to the violating state.
+
+Starting from the violating state `s`, the algorithm iterate backwards through the `trace` list, at each step picking one state that can reach the current state in one step. If the model has inputs, the corresponding input is also picked. The process continues until an initial state is reached.
+
+Lookin at the real implementation the function `compute_counter_example(model, s, trace)` does exactly that:
+- It first checks if the model has inputs
+- It compute the list of invalid states intersecting `new` (the set of states that contains an invalid one) with `neg_spec_bdd`.
+- It picks one of those invalid states as starting point and insert it in the counter-example list.
+- It then iterate backwards through the `trace` list starting from the second to last element, at each step picking one state that can reach the current state in one step.
+- If the model has inputs, the corresponding input is also picked.
+- The process continues until the trace is finished.
+
+It's easy to see that the resulting `counter_example` list is a valid execution of the system that lead to a state that violate the specification. Even if the trace is composed by a single region (it can only happen if the system starts with and invalid configuration) the algorithm will work correctly, returning a counter-example composed by the initial state only.
+
+== Correctness
+
+In this section we will demonstrate in a formal way the correctness of the implemented algorithm.
+The algoritm is composed by two main loop:
+- The first loop explore all the reachable states of the system, checking if one of them violate the specification.
+- The second loop generate a counter-example if one of the reachable states violate the specification.
+
+Using the Loop Invariant technique we can prove the correctness of the algorithm.
+
+=== Exploration of the reachable states
+
+Starting from the first loop, we can indentify three loop invariants:
+- `reach`: representing the region of all the already reached states without repetitions.
+- `new`: represent the region of all the newly found reachable states.
+- `trace`: a list of regions representing all the regions reached at each iteration.
+
+Initially `reach`,`new` and `trace` are initialized with the initial states of the model, therefore the loop invariants hold.
+
+The loop condition check if `new` is not empty, in that case there are still new states to explore and the loop body is executed.
+
+For each interation $i$:
+- `new` is updated to contain all the states that can be reached from `new` in one step, removing all the states that are already in `reach`. Therefore `new` contains only states reachable from the $i - 1$ iteration region that are not already in `reach`.
+- `reach` is updated to contain all the states reached so far, therefore it contains all the states reachable from the initial states in a finite number of steps.
+- `trace` is updated appending the current `new` region, therefore is a list of $i + 1$ elements representing all the regions reachable from the previus region.
+
+We can then see that the loop invariants hold for the base case and for the inductive case. Therefore by induction the loop invariants hold for each iteration of the loop.
+
+Since we are dealing with a finite state model the algorithm will eventually explore all the reachable states. Therefore there are only two possible execution:
+
++ `new` becomes empty, all the reachable states have been explored and none of them violate the specification, so the algorithm return `True` along with `None`.
++ `new` intersected with `neg_spec_bdd` is not empty, there exists at least one newly reached state that violate the specification, so the algorithm return `False` along with a counter-example.
+
+=== Counter-example generation
+
+In the second part of the algorithm we can identify two loop invariant:
+
+- `counter_example`: a list of alternating states and inputs representing the execution of the system that lead to a state that violate the specification.
+- `current_bad_state`: the current state being added to the counter-example list.
+- `prev_states`: the set of states that can reach `current_bad_state` in one step.
+
+Initially `current_bad_state` is initialized with a state picked from `new` intersected with `neg_spec_bdd`, therefore it is a state that violate the specification. The `counter_example` list is initialized with that state only. Therefore the loop invariants hold.
+
+The loop iterate backwards through the `trace` list, starting from the second to last element. At each step $i$:
+- `prev_state` is a state picked form the set of states that can reach `current_bad_state` in one step and that are also in the $i$ `trace` region.
+- `counter_example` is updated inserting `prev_state` and the corresponding input (if the model has inputs) at the beginning of the list.
+- `current_bad_state` is updated to `prev_state`.
+
+The invariants hold for the base case and for the inductive case. Therefore by induction the loop invariants hold for each iteration of the loop.
+
+The trace list is finite, since the model is finite and the algorithm explore only reachable states. Therefore the loop will terminate after a finite number of steps. There are only one possible execution: the trace is finished and the algorithm return the `counter_example` list.
+
+By construction `counter_example` is an execution of the system that lead to a state that violate the specification.
 
 #pagebreak()
 
@@ -150,14 +230,14 @@ def check_explain_response_spec(spec):
     """
     Return whether the loaded SMV model satisfies or not the GR(1) formula
     `spec`, that is, whether all executions of the model satisfies `spec`
-    or not. 
+    or not.
     """
 
     model = pynusmv.glob.prop_database().master.bddFsm
     react = parse(spec)
     if (react == None):
         return None
-    
+
     f_spec, g_spec = react
 
     f_bdd = spec_to_bdd(model, f_spec)
@@ -198,10 +278,10 @@ After that we can construct the needed `tuple` visiting the array from the end t
 def compute_prefix(model, s):
   has_inputs = len(model.bddEnc.inputsVars) > 0
   # 2.3 Reaching the self loop
-  
+
   # Insert inside frontiers the regions to reach s
   # [ init ... pre_s ]
-  reached = model.init 
+  reached = model.init
   frontiers = [reached]
 
   while (reached * s).is_false():
@@ -218,7 +298,7 @@ def compute_prefix(model, s):
       # The current state is one of the states that can reach last in
       # one step
       current_state = model.pick_one_state(frontier * can_reach_last)
-      
+
       if has_inputs:
           inputs = model.get_inputs_between_states(current_state, last)
           path.insert(0, model.pick_one_inputs(inputs).get_str_values())
@@ -228,7 +308,7 @@ def compute_prefix(model, s):
       path.insert(0, current_state.get_str_values())
 
       last = current_state
-      
+
   return path
 ```
 
@@ -267,7 +347,7 @@ def compute_loop(model, s, frontiers):
       old = curr
       pred = model.pre(curr) * frontiers[i]
       curr = model.pick_one_state(pred)
-      
+
       if has_inputs:
           inputs = model.get_inputs_between_states(old, curr)
           path.insert(0, model.pick_one_inputs(inputs).get_str_values())
@@ -275,7 +355,7 @@ def compute_loop(model, s, frontiers):
           path.insert(0, {})
 
       path.insert(0, curr.get_str_values())
-  
+
   # Looping input
   if has_inputs:
       inputs = model.get_inputs_between_states(s, curr)

@@ -29,6 +29,37 @@ def default_check_explain_inv_spec(spec):
     res, trace = pynusmv.mc.check_explain_ltl_spec(ltlspec)
     return res, trace
 
+def compute_counter_example(model, target, trace):
+    current_bad_state = target                                  # Current execution state
+    pre_states = model.pre(current_bad_state)                   # States that can reach current_bad_state in one step   
+    counter_example = [current_bad_state.get_str_values()]      # Counter-example list
+
+    # Check if the model uses inputs
+    has_inputs = not not len(model.bddEnc.inputsVars)           
+
+    # Interate over the trace starting from the second last
+    for current_set in reversed(trace[:-1]):
+
+        # Get a state that has a transition to current_bad_state
+        prev_state = model.pick_one_state(current_set * pre_states)     
+
+        # Get the input that caused the transition
+        if has_inputs:
+            trans_inputs = model.get_inputs_between_states(prev_state, current_bad_state)
+            input_values = model.pick_one_inputs(trans_inputs).get_str_values()
+            counter_example.insert(0, input_values)
+        else:
+            counter_example.insert(0, {})
+
+        # Add the picked state
+        counter_example.insert(0, prev_state.get_str_values())        
+
+        # Update invariants
+        current_bad_state = prev_state                          # Update the current bad state 
+        pre_states = model.pre(current_bad_state)               # States that can reach current_bad_state in one step
+
+    return counter_example               
+
 
 def check_explain_inv_spec(spec):
     """
@@ -48,21 +79,21 @@ def check_explain_inv_spec(spec):
     are their value.
     """
     # 1. Setup the bdds
-    spec_bdd = spec_to_bdd(model, spec)                 # Bdd of spec
-    negated_spec_bdd = -spec_bdd                        # Bdd of ~spec
+    model = pynusmv.glob.prop_database().master.bddFsm                  # Model fsm
 
-    model = pynusmv.glob.prop_database().master.bddFsm  # Model fsm
+    spec_bdd = spec_to_bdd(model, spec)                                 # Bdd of spec
+    negated_spec_bdd = -spec_bdd                                        # Bdd of ~spec
 
     # 2. Explore the regions
-    reach = model.init                                  # Already explored states
-    new = model.init                                    # States to explore
+    reach = model.init                                                  # Already explored states
+    new = model.init                                                    # States to explore
 
-    trace = [reach]                                     # Trace used to save the execution
+    trace = [reach]                                                     # Trace used to save the execution
 
     while new.isnot_false() and not new.intersected(negated_spec_bdd):
 
-        new = model.post(new) - reach                   # Remove the already checked states
-        reach = reach + new                             # Consider them as reached
+        new = model.post(new) - reach                                   # Remove the already checked states
+        reach = reach + new                                             # Consider them as reached
 
         trace.append(new)
 
@@ -71,33 +102,10 @@ def check_explain_inv_spec(spec):
         return (True, None)
     
     # 3. Build the counter-example
-    invalid_states = new * phi                                  
-    current_bad_state = model.pick_one_state(invalid_states)
-
-    counter_example = [current_bad_state.get_str_values()]
-
-    # Check if the model uses inputs
-    has_inputs = not not len(model.bddEnc.inputsVars)
-
-    # Interate over the trace starting from the second last
-    for current_set in reversed(trace[:-1]):
-
-        # Get a state that has a transition to current_bad_state
-        pre_states = model.pre(current_bad_state)                       
-        prev_state = model.pick_one_state(current_set * pre_states)
-
-        # Get the input that caused the transition
-        if has_inputs:
-            trans_inputs = model.get_inputs_between_states(prev_state, current_bad_state)
-            input_values = model.pick_one_inputs(trans_inputs).get_str_values()
-            counter_example.insert(0, input_values)
-        else:
-            counter_example.insert(0, {})
-
-        # Add the picked state
-        counter_example.insert(0, prev_state.get_str_values())        
-
-        current_bad_state = prev_state
+    invalid_states = new * negated_spec_bdd                             # States in new that violate the spec
+    target = model.pick_one_state(invalid_states)                       # State that violate the spec
+    
+    counter_example = compute_counter_example(model, target, trace)     # Execution leading to the violation
 
     # The property is not an invariant, return a counter-example
     return (False, tuple(counter_example))
