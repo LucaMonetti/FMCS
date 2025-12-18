@@ -225,9 +225,9 @@ For each iteration $i$:
 - `trace` appends the current set `new`, therefore is a list of $i + 1$ elements representing all the regions reachable from the previous region.
 
 ==== Termination
-We can then see that the loop invariants hold for the base case and for the inductive case. Therefore by induction the loop invariants hold for each iteration of the loop.
+The loop invariants hold for the base case and for the inductive case. Therefore by induction the loop invariants hold for each iteration of the loop.
 
-Since we are dealing with a finite state model the algorithm will eventually explore all the reachable states. Therefore there are only two possible execution:
+Since the state space of the model is finite the algorithm will eventually explore all the reachable states. Therefore there are only two possible execution:
 
 + `new` becomes empty, all the reachable states have been explored and none of them violate the specification, so the algorithm returns `(True, None)`.
 + `new` intersected with `neg_spec_bdd` is not empty, there exists at least one newly reached state that violates the specification $phi$, so the algorithm returns `False` along with a counter-example.
@@ -305,36 +305,41 @@ The algorithm then preceeds to identify a cycle where $g$ remains `False`:
 
 ```python
 def check_explain_response_spec(spec):
-    """
-    Return whether the loaded SMV model satisfies or not the GR(1) formula
-    `spec`, that is, whether all executions of the model satisfies `spec`
-    or not.
-    """
+  # 1. Check the formula structure
+  react = parse(spec)
+  if (react == None):
+      return None
 
-    model = pynusmv.glob.prop_database().master.bddFsm
-    react = parse(spec)
-    if (react == None):
-        return None
+  # 2. Setup the bdds
+  model = pynusmv.glob.prop_database().master.bddFsm
+  
+  f_spec, g_spec = react
 
-    f_spec, g_spec = react
+  f_bdd = spec_to_bdd(model, f_spec)                      # BDD for formula f
+  neg_g_bdd = spec_to_bdd(model, ~g_spec)                 # BDD for formula ~g
 
-    f_bdd = spec_to_bdd(model, f_spec)
-    neg_g_bdd = spec_to_bdd(model, ~g_spec)
+  # 3. Cycle detection
+  reach = model.reachable_states                          # Reachable states
+  recur = reach * neg_g_bdd * f_bdd                       # Possible starting point for a cycle
 
-    reach = model.reachable_states
-    recur = reach * neg_g_bdd * f_bdd
+  while recur.isnot_false():
+      pre_reach = pynusmv.dd.BDD.false()                  # States that can reach recur
+      new = model.pre(recur) * neg_g_bdd                  # Newly discovered states
 
-    while recur.isnot_false():
-        pre_reach = pynusmv.dd.BDD.false()
-        new = model.pre(recur) * neg_g_bdd
+      while new.isnot_false():
 
-        while new.isnot_false():
-            pre_reach = pre_reach + new
-            if recur <= pre_reach:
-                return (False, compute_counter_example(model, recur, pre_reach))
-            new = (model.pre(new) - pre_reach) * neg_g_bdd
-        recur = recur * pre_reach
-    return (True, None)
+          pre_reach = pre_reach + new
+
+          if recur <= pre_reach:
+              # A cycle is found
+              return (False, compute_counter_example(model, recur, pre_reach))
+
+          new = (model.pre(new) - pre_reach) * neg_g_bdd  # Added only state where ~g is True
+
+      recur = recur * pre_reach
+
+  # The formula is satisfied by the model
+  return (True, None)
 ```
 
 === Counter example generation
@@ -348,6 +353,31 @@ Those two parts are computed by `compute_prefix` and `compute_loop` and then com
 
 In the end the algorithm return an execution that start from an initial stata, reach a state where $f$ holds and $g$ is `False` and then proced with a cycle whithin which $g$ is always `False`.
 
+```python
+def compute_counter_example(model, recur, pre_reach):
+  # Analyze each state of recur
+  for s in model.pick_all_states(recur):
+
+      r = pynusmv.dd.BDD.false()              # Reached states
+      new = model.post(s) * pre_reach         # Newly valid state in post image  
+
+      frontiers = [new]
+
+      # Compute frontiers
+      while new.isnot_false():
+          r = r + new
+          new = (model.post(new) * pre_reach) - r
+
+          frontiers.append(new)
+      
+      r = r * recur
+
+      if s <= r:
+          prefix = compute_prefix(model, s)
+          loop = compute_loop(model, s, frontiers)
+          return tuple(prefix + loop)
+```
+
 ==== Build the prefix
 
 The prefix is reconstructed by identifying a path form the initial state set to the specific set identified as the entry point of the cycle. This procedure follows the previously discussed symbolic reachability approach.
@@ -358,39 +388,48 @@ Once the target state is located the sequence is constructed by traversing the f
 
 ```python
 def compute_prefix(model, s):
-  has_inputs = len(model.bddEnc.inputsVars) > 0
-  # 2.3 Reaching the self loop
+  # Check if the model uses inputs
+  has_inputs = not not len(model.bddEnc.inputsVars)
 
-  # Insert inside frontiers the regions to reach s
-  # [ init ... pre_s ]
-  reached = model.init
-  frontiers = [reached]
+  reach = model.init                  # Already explored states
+  new = model.init                    # States to explore
 
-  while (reached * s).is_false():
-      next = model.post(reached) - reached
-      frontiers.append(next)
-      reached = reached + next
+  frontiers = [reach]
 
-  path = []
-  last = s
-  # Construct the path traversing the frontiers in reverse
+  while (reach * s).is_false():       # Check if s is contained in reach
+
+      new = model.post(new) - reach   # Find reachable states and remove already checked ones
+      reach = reach + new             # Add new states to reach
+
+      frontiers.append(new)           # Add reached region to frontiers
+
+  # Build the path
+  current = s
+
+  pre_states = model.pre(current)
+  path = [current.get_str_values()]
+
+  # Interate over the frontiers starting from the second last
   for frontier in reversed(frontiers[:-1]):
-      can_reach_last = model.pre(last)
-
-      # The current state is one of the states that can reach last in
-      # one step
-      current_state = model.pick_one_state(frontier * can_reach_last)
-
+      
+      # Get a state that has a transition to current
+      prev_state = model.pick_one_state(frontier * pre_states)     
+      
+      # Get the input that caused the transition
       if has_inputs:
-          inputs = model.get_inputs_between_states(current_state, last)
-          path.insert(0, model.pick_one_inputs(inputs).get_str_values())
+          trans_inputs = model.get_inputs_between_states(pre_states, current)
+          inpute_values = model.pick_one_inputs(inputs).get_str_values()
+          path.insert(0, input_values)
       else:
           path.insert(0, {})
 
-      path.insert(0, current_state.get_str_values())
+      # Add the picked state
+      path.insert(0, prev_state.get_str_values())
 
-      last = current_state
-
+      # Update invariants
+      current = prev_state                # Update the current state
+      pre_states = model.pre(current)     # States that can reach current in one step
+      
   return path
 ```
 
@@ -408,38 +447,90 @@ At each iteration the algorithm select a predecessor state from the preceding fr
 
 ```python
 def compute_loop(model, s, frontiers):
-  has_inputs = len(model.bddEnc.inputsVars) > 0
+  # Check if the model uses inputs
+  has_inputs = not not len(model.bddEnc.inputsVars)
 
-  # Phase 2.2: Building the self loop
+  # Find the minimum value of k
   for k in range(len(frontiers)):
       if s <= frontiers[k]:
           break
-  # frontiers[k] contains the loop knot
 
-  path = [ s.get_str_values() ]
-  curr = s
+  # Reconstruct the execution
+  path = [ s.get_str_values() ]                       # Cycle execution
+  current = s                                         # Current Value
 
-  for i in range(k - 1, -1, -1):
+  for i in range(k - 1, -1, -1):                    
 
-      old = curr
-      pred = model.pre(curr) * frontiers[i]
-      curr = model.pick_one_state(pred)
-
+      # Get a state that has a transition to current
+      prev_states = model.pre(current) * frontiers[i]
+      prev_state = model.pick_one_state(prev_states)
+      
+        # Get the input that caused the transition
       if has_inputs:
-          inputs = model.get_inputs_between_states(old, curr)
-          path.insert(0, model.pick_one_inputs(inputs).get_str_values())
+          trans_inputs = model.get_inputs_between_states(pre_states, current)
+          inpute_values = model.pick_one_inputs(inputs).get_str_values()
+          path.insert(0, input_values)
       else:
           path.insert(0, {})
 
-      path.insert(0, curr.get_str_values())
+      # Add the picked state
+      path.insert(0, prev_state.get_str_values())
 
-  # Looping input
+      # Update invariants
+      current = prev_state                # Update the current state
+      pre_states = model.pre(current)     # States that can reach current in one step
+  
+  # Get inputs that starts the loop
   if has_inputs:
-      inputs = model.get_inputs_between_states(s, curr)
+      inputs = model.get_inputs_between_states(s, current)
       path.insert(0, model.pick_one_inputs(inputs).get_str_values())
   else:
       path.insert(0, {})
 
+  # Add s at the beginning of the loop
   path.insert(0, s.get_str_values())
+
   return path
 ```
+
+== Correctness
+
+This section provides a formal demonstration of correctness for the implemented algorithm.
+The algorithm is composed by three main loop that can be repeated in different functions:
+- Cycle identification
+- Breadth-First Search
+- Counter-example generation
+
+The correctness of Breadth-First Search and Counter Example generation are discussed in the previous part. The correctness of the cycle identification can be proved using the Loop invariant technique.
+
+=== Cycle identification
+
+The cycle identification phase identifies a set of states thath violates the liveness property $G( f -> F g)$ by searching for a cycle where $f$ has occourred but $g$ never follows.
+
+==== Loop invariants
+
+The cycle detection is done by an outer loop that reduce the set of potential states that can start a cycle and an inner state that computes the set of states that can reach each of those states.
+
+Two main invariant are maintained in the inner loop:
+- `pre_reach`: represents the region of all states that can both reach the current `recur` set in one or more transition and satisfies $not g$. 
+- `new`: represent the region of all the newly found states that can both reach the current `recur` in one or more transition and satisfy $not g$.
+
+==== Base case
+Initiallt `pre_reach` is empty and `new` is initialized to `model.pre(recur) * neg_g_bdd`. The invariants hold for the base case.
+
+==== Inductive step
+The loop condition checks if `new` is not empty. In that case there are still states that can starts a cycle where $not g$ holds.
+
+For each iteration $i$:
+- `pre_reach` is updated to include `new`. It now contains all the states that can reach the current `recur` in one or more transition.
+- `new` is updated with the pre-image of the current `new` by subtracting states already in `pre_reach` and restrinting its value to those that respect `not_g_bdd` ($not g$). It now contains all the states that can reach the current `recur` in $i + 1$ steps.
+- If `recur` becoms a subset of `pre_reach` there is a cycle.
+
+==== Termination
+The loop invariants hold for the base case and for the inductive case. Therefore by induction the loop invariants hold for each iteration of the loop.
+
+Since the state space of the model is finite the set of states `pre_reach` cannot grow indefinitely.
+
+Therefore there are only two possible execution:
++ `new` becomes empty. This means that the current `recur` cannot reach itself. The outer loop will reduce `recur` and tries again. If `recur` becomes empty the algorithm returns `(True, None)`.
++ If the condition `recur <= pre_reach` becomes true a cycle exists. The algorithm returns `False` along with a counter-example.

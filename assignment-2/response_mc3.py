@@ -175,14 +175,16 @@ def compute_counter_example(model, recur, pre_reach):
     States and inputs are represented by dictionaries where keys are state 
     and inputs variable of the loaded SMV model, and values are their value.
     """
-
-    for s in model.pick_all_states(recur):      # Analyze each state of recur
+    
+    # Analyze each state of recur
+    for s in model.pick_all_states(recur):
 
         r = pynusmv.dd.BDD.false()              # Reached states
         new = model.post(s) * pre_reach         # Newly valid state in post image  
 
         frontiers = [new]
 
+        # Compute frontiers
         while new.isnot_false():
             r = r + new
             new = (model.post(new) * pre_reach) - r

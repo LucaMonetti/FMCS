@@ -32,7 +32,7 @@ def default_check_explain_inv_spec(spec):
 def compute_counter_example(model, trace, neg_spec):
     """
     Return a list of alternating states in trace and inputs, starting
-    with an inital state of the model and ennding with target. 
+    with an inital state of the model and ending with target. 
     States and inputs are represented by dictionaries where keys are state 
     and inputs variable of the loaded SMV model, and values are their value.
     """
