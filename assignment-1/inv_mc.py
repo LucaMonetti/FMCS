@@ -30,9 +30,16 @@ def default_check_explain_inv_spec(spec):
     return res, trace
 
 def compute_counter_example(model, target, trace):
-    current_bad_state = target                                  # Current execution state
-    pre_states = model.pre(current_bad_state)                   # States that can reach current_bad_state in one step   
-    counter_example = [current_bad_state.get_str_values()]      # Counter-example list
+    """
+    Return a list of alternating states in trace and inputs, starting
+    with an inital state of the model and ennding with target. 
+    States and inputs are represented by dictionaries where keys are state 
+    and inputs variable of the loaded SMV model, and values are their value.
+    """
+
+    current = target                                            # Current execution state
+    pre_states = model.pre(current)                             # States that can reach current in one step   
+    counter_example = [current.get_str_values()]                # Counter-example list
 
     # Check if the model uses inputs
     has_inputs = not not len(model.bddEnc.inputsVars)           
@@ -40,12 +47,12 @@ def compute_counter_example(model, target, trace):
     # Interate over the trace starting from the second last
     for current_set in reversed(trace[:-1]):
 
-        # Get a state that has a transition to current_bad_state
+        # Get a state that has a transition to current
         prev_state = model.pick_one_state(current_set * pre_states)     
 
         # Get the input that caused the transition
         if has_inputs:
-            trans_inputs = model.get_inputs_between_states(prev_state, current_bad_state)
+            trans_inputs = model.get_inputs_between_states(prev_state, current)
             input_values = model.pick_one_inputs(trans_inputs).get_str_values()
             counter_example.insert(0, input_values)
         else:
@@ -55,8 +62,8 @@ def compute_counter_example(model, target, trace):
         counter_example.insert(0, prev_state.get_str_values())        
 
         # Update invariants
-        current_bad_state = prev_state                          # Update the current bad state 
-        pre_states = model.pre(current_bad_state)               # States that can reach current_bad_state in one step
+        current = prev_state                                    # Update the current bad state 
+        pre_states = model.pre(current)                         # States that can reach current in one step
 
     return counter_example               
 
