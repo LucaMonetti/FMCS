@@ -82,6 +82,16 @@
 
 == Assignment
 
+The first part of the assignement request the implementation of the symbolic algorithm fo invariant verification. If the test property is not an invariant of the model the algorithm also provide an execution of the system that violate the invariant.
+
+In particular the algorithm must respect the following specification:
+
+- Check if `spec` is an invariant for the loaded model
+- The return value is a `tuple` of 2 elemens:
+  - The first element is a Boolean value that is `True` if the formula is an invariant, `False` otherwise
+  - The second element is `None` is the formula is an invariant and contains an execution that violate that specification otherwise.
+- The execution take the form of a tuple of alternating states and input, ending with a state.
+
 == Logic
 
 == Implementation

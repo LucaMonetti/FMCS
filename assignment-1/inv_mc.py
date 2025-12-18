@@ -99,7 +99,7 @@ def check_explain_inv_spec(spec):
 
         current_bad_state = prev_state
 
-    # The property is not an INV, return a counter example
+    # The property is not an invariant, return a counter-example
     return (False, tuple(counter_example))
 
 if __name__ == "__main__":
